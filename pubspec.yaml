@@ -28,4 +28,4 @@ flutter:
     - assets/templates/modele.docx
 
 dependency_overrides:
-  archive: 3.3.2
+  archive: 3.3.6
