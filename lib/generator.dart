@@ -12,8 +12,6 @@ class DocxGenerator {
     String outputDirPath,
     List<String> customVariableNames,
   ) async {
-    // زدنا هذي باش نعرفو المتغيرات
-
     final file = File(templatePath);
     final bytes = await file.readAsBytes();
 
@@ -22,7 +20,7 @@ class DocxGenerator {
         final docx = await DocxTemplate.fromBytes(bytes);
         Content content = Content();
 
-        // المتغيرات الثابتة (إذا كانت فارغة يعوضها بفراغ باش ما يبقاش الكود في الوورد)
+        // هنا المتغيرات خليها كيما راهي، المكتبة تزيدلها {#} أوتوماتيكيا في الوورد
         content
           ..add(TextContent("nom", eleveur.nom.isNotEmpty ? eleveur.nom : ""))
           ..add(
@@ -55,15 +53,13 @@ class DocxGenerator {
             ),
           );
 
-        // المتغيرات المخصصة (يقبلها حتى لو كانت فارغة)
         for (var varName in customVariableNames) {
-          String val =
-              eleveur.customData[varName] ??
-              ""; // ?? "" معناها إذا مالقاهاش يحط فراغ
+          String val = eleveur.customData[varName] ?? "";
           content.add(TextContent(varName, val));
         }
 
         final d = await docx.generate(content);
+
         if (d != null) {
           String safeName = eleveur.nom.isEmpty
               ? "Inconnu"
@@ -72,6 +68,11 @@ class DocxGenerator {
             p.join(outputDirPath, 'Certificat_$safeName.docx'),
           );
           await outFile.writeAsBytes(d);
+        } else {
+          // هادي باش إذا كان الوورد غالط ما يسكتش، يخرجلك إيرور باش تفيق
+          throw Exception(
+            "الملف فارغ أو لا يحتوي على متغيرات صحيحة! تأكد من كتابة المتغيرات بهذا الشكل: {#nom}",
+          );
         }
       }
     }

@@ -1,3 +1,212 @@
+==> lib/db_helper.dart <==
+import 'dart:convert';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+
+class Eleveur {
+  int? id;
+  String nom;
+  String pere;
+  String cin;
+  String dateCin;
+  String daira;
+
+  bool isSelected = false;
+  String ovins = "";
+  String brebis = "";
+
+  // الخانات المخصصة (تتبدل من شخص لشخص)
+  Map<String, String> customData = {};
+
+  Eleveur({
+    this.id,
+    required this.nom,
+    required this.pere,
+    required this.cin,
+    required this.dateCin,
+    required this.daira,
+    Map<String, String>? customData,
+  }) {
+    if (customData != null) {
+      this.customData = customData;
+    }
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'nom': nom,
+      'pere': pere,
+      'cin': cin,
+      'date_cin': dateCin,
+      'daira': daira,
+      'custom_data': jsonEncode(
+        customData,
+      ), // تحويل المتغيرات المخصصة لنص باش تتسجل
+    };
+  }
+
+  factory Eleveur.fromMap(Map<String, dynamic> map) {
+    return Eleveur(
+      id: map['id'],
+      nom: map['nom'],
+      pere: map['pere'],
+      cin: map['cin'],
+      dateCin: map['date_cin'],
+      daira: map['daira'],
+      customData: map['custom_data'] != null
+          ? Map<String, String>.from(jsonDecode(map['custom_data']))
+          : {},
+    );
+  }
+}
+
+class DatabaseHelper {
+  static Database? _database;
+
+  static Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDB();
+    return _database!;
+  }
+
+  static Future<Database> _initDB() async {
+    String path = join(await getDatabasesPath(), 'vet_database.db');
+    return await openDatabase(
+      path,
+      version: 2, // رفعنا النسخة لتحديث قاعدة البيانات
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE eleveurs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT, pere TEXT, cin TEXT, date_cin TEXT, daira TEXT,
+            custom_data TEXT
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            "ALTER TABLE eleveurs ADD COLUMN custom_data TEXT DEFAULT '{}'",
+          );
+        }
+      },
+    );
+  }
+
+  static Future<void> insertEleveur(Eleveur eleveur) async {
+    final db = await database;
+    await db.insert(
+      'eleveurs',
+      eleveur.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  static Future<void> updateEleveur(Eleveur eleveur) async {
+    final db = await database;
+    await db.update(
+      'eleveurs',
+      eleveur.toMap(),
+      where: 'id = ?',
+      whereArgs: [eleveur.id],
+    );
+  }
+
+  static Future<void> deleteEleveur(int id) async {
+    final db = await database;
+    await db.delete('eleveurs', where: 'id = ?', whereArgs: [id]);
+  }
+
+  static Future<List<Eleveur>> getEleveurs() async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query('eleveurs');
+    return List.generate(maps.length, (i) => Eleveur.fromMap(maps[i]));
+  }
+}
+
+==> lib/generator.dart <==
+import 'dart:io';
+import 'package:docx_template/docx_template.dart';
+import 'package:path/path.dart' as p;
+import 'db_helper.dart';
+
+class DocxGenerator {
+  static Future<void> generateCertificates(
+    List<Eleveur> eleveurs,
+    String dateVaccin,
+    String dateCertificat,
+    String templatePath,
+    String outputDirPath,
+    List<String> customVariableNames,
+  ) async {
+    // زدنا هذي باش نعرفو المتغيرات
+
+    final file = File(templatePath);
+    final bytes = await file.readAsBytes();
+
+    for (var eleveur in eleveurs) {
+      if (eleveur.isSelected) {
+        final docx = await DocxTemplate.fromBytes(bytes);
+        Content content = Content();
+
+        // المتغيرات الثابتة (إذا كانت فارغة يعوضها بفراغ باش ما يبقاش الكود في الوورد)
+        content
+          ..add(TextContent("nom", eleveur.nom.isNotEmpty ? eleveur.nom : ""))
+          ..add(
+            TextContent("pere", eleveur.pere.isNotEmpty ? eleveur.pere : ""),
+          )
+          ..add(TextContent("cin", eleveur.cin.isNotEmpty ? eleveur.cin : ""))
+          ..add(
+            TextContent(
+              "date_cin",
+              eleveur.dateCin.isNotEmpty ? eleveur.dateCin : "",
+            ),
+          )
+          ..add(
+            TextContent("daira", eleveur.daira.isNotEmpty ? eleveur.daira : ""),
+          )
+          ..add(
+            TextContent("ovins", eleveur.ovins.isNotEmpty ? eleveur.ovins : ""),
+          )
+          ..add(
+            TextContent(
+              "brebis",
+              eleveur.brebis.isNotEmpty ? eleveur.brebis : "",
+            ),
+          )
+          ..add(TextContent("date_v", dateVaccin.isNotEmpty ? dateVaccin : ""))
+          ..add(
+            TextContent(
+              "date_c",
+              dateCertificat.isNotEmpty ? dateCertificat : "",
+            ),
+          );
+
+        // المتغيرات المخصصة (يقبلها حتى لو كانت فارغة)
+        for (var varName in customVariableNames) {
+          String val =
+              eleveur.customData[varName] ??
+              ""; // ?? "" معناها إذا مالقاهاش يحط فراغ
+          content.add(TextContent(varName, val));
+        }
+
+        final d = await docx.generate(content);
+        if (d != null) {
+          String safeName = eleveur.nom.isEmpty
+              ? "Inconnu"
+              : eleveur.nom.replaceAll(" ", "_").replaceAll("/", "");
+          final outFile = File(
+            p.join(outputDirPath, 'Certificat_$safeName.docx'),
+          );
+          await outFile.writeAsBytes(d);
+        }
+      }
+    }
+  }
+}
+
+==> lib/main.dart <==
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
@@ -34,17 +243,16 @@ class _MainAppState extends State<MainApp> {
 
   List<String> _customVariableNames = [];
 
-  // تم تعديل الرموز إلى الشكل الجديد
   final List<String> _baseVariables = [
-    '{#nom}',
-    '{#pere}',
-    '{#cin}',
-    '{#date_cin}',
-    '{#daira}',
-    '{#ovins}',
-    '{#brebis}',
-    '{#date_v}',
-    '{#date_c}',
+    '{{nom}}',
+    '{{pere}}',
+    '{{cin}}',
+    '{{date_cin}}',
+    '{{daira}}',
+    '{{ovins}}',
+    '{{brebis}}',
+    '{{date_v}}',
+    '{{date_c}}',
   ];
 
   @override
@@ -58,7 +266,7 @@ class _MainAppState extends State<MainApp> {
     final data = await DatabaseHelper.getEleveurs();
     Set<String> savedKeys = {};
     for (var e in data) {
-      savedKeys.addAll(e.customData.keys);
+      savedKeys.addAll(e.customData.keys); // يجبد المتغيرات اللي تسجلت من قبل
     }
 
     setState(() {
@@ -101,7 +309,6 @@ class _MainAppState extends State<MainApp> {
       String newPath = p.join(tDir.path, p.basename(source.path));
       await source.copy(newPath);
       await _loadTemplates();
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("تم حفظ المودال!", textDirection: TextDirection.rtl),
@@ -115,12 +322,14 @@ class _MainAppState extends State<MainApp> {
     _loadData();
   }
 
+  // النافذة الجديدة لإدارة وحذف وإضافة المتغيرات المخصصة
   void _manageCustomVariablesDialog() {
     TextEditingController varName = TextEditingController();
     showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
+          // هذي تخلي النافذة تتحدث كي نمحيو متغير
           builder: (context, setDialogState) {
             return AlertDialog(
               title: const Text(
@@ -138,6 +347,8 @@ class _MainAppState extends State<MainApp> {
                         textDirection: TextDirection.rtl,
                         style: TextStyle(color: Colors.grey),
                       ),
+
+                    // قائمة المتغيرات الحالية مع زر الحذف
                     ..._customVariableNames
                         .map(
                           (v) => ListTile(
@@ -157,7 +368,9 @@ class _MainAppState extends State<MainApp> {
                                   for (var e in _eleveurs) {
                                     if (e.customData.containsKey(v)) {
                                       e.customData.remove(v);
-                                      DatabaseHelper.updateEleveur(e);
+                                      DatabaseHelper.updateEleveur(
+                                        e,
+                                      ); // تحديث قاعدة البيانات
                                     }
                                   }
                                 });
@@ -167,6 +380,8 @@ class _MainAppState extends State<MainApp> {
                         )
                         .toList(),
                     const Divider(),
+
+                    // خانة إضافة متغير جديد
                     TextField(
                       controller: varName,
                       textDirection: TextDirection.rtl,
@@ -279,11 +494,10 @@ class _MainAppState extends State<MainApp> {
                   daira: daira.text,
                   customData: eleveur?.customData ?? {},
                 );
-                if (isEditing) {
+                if (isEditing)
                   await DatabaseHelper.updateEleveur(newEleveur);
-                } else {
+                else
                   await DatabaseHelper.insertEleveur(newEleveur);
-                }
                 _loadData();
                 if (!mounted) return;
                 Navigator.pop(context);
@@ -296,54 +510,39 @@ class _MainAppState extends State<MainApp> {
     );
   }
 
-  // تم التعديل هنا باش يخرجلك الإيرور إذا كان الوورد غالط
   void _generate() async {
     if (_selectedTemplate == null) return;
     String? selectedDirectory = await FilePicker.getDirectoryPath(
       dialogTitle: "اختر مسار الحفظ",
     );
     if (selectedDirectory != null) {
-      try {
-        await DocxGenerator.generateCertificates(
-          _eleveurs,
-          _dateVController.text,
-          _dateCController.text,
-          _selectedTemplate!.path,
-          selectedDirectory,
-          _customVariableNames,
-        );
+      // نبعثو _customVariableNames للـ Generator باش يقدر يعوض الفارغين
+      await DocxGenerator.generateCertificates(
+        _eleveurs,
+        _dateVController.text,
+        _dateCController.text,
+        _selectedTemplate!.path,
+        selectedDirectory,
+        _customVariableNames,
+      );
 
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "تم استخراج الشهادات بنجاح!",
-              textDirection: TextDirection.rtl,
-            ),
-            backgroundColor: Colors.green,
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "تم استخراج الشهادات بنجاح!",
+            textDirection: TextDirection.rtl,
           ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "خطأ: ${e.toString()}",
-              textDirection: TextDirection.rtl,
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     List<String> allVariables = List.from(_baseVariables);
-    // تم التعديل هنا باش حتى المتغيرات الإضافية تدي الرمز {#}
-    allVariables.addAll(_customVariableNames.map((v) => '{#$v}'));
+    allVariables.addAll(_customVariableNames.map((v) => '{{$v}}'));
 
     return Scaffold(
       appBar: AppBar(
@@ -403,7 +602,7 @@ class _MainAppState extends State<MainApp> {
 
             ExpansionTile(
               title: const Text(
-                "⚙️ إعدادات التواريخ والقوالب",
+                "⚙️ إعدادات التواريخ والقوالب (إضغط للفتح/الإغلاق)",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.blueGrey,
@@ -466,7 +665,7 @@ class _MainAppState extends State<MainApp> {
                 ),
                 const SizedBox(height: 10),
                 ElevatedButton.icon(
-                  onPressed: _manageCustomVariablesDialog,
+                  onPressed: _manageCustomVariablesDialog, // زر إدارة المتغيرات
                   icon: const Icon(Icons.settings),
                   label: const Text("إدارة المتغيرات الإضافية (إضافة/حذف)"),
                 ),
@@ -603,10 +802,12 @@ class _MainAppState extends State<MainApp> {
                                   child: TextField(
                                     controller: TextEditingController(
                                       text: e.customData[varName] ?? "",
-                                    ),
+                                    ), // باش كي تحذف وترجع يلقى القديم
                                     onChanged: (val) {
                                       e.customData[varName] = val;
-                                      DatabaseHelper.updateEleveur(e);
+                                      DatabaseHelper.updateEleveur(
+                                        e,
+                                      ); // يحفظ التغيير أوتوماتيكيا
                                     },
                                     decoration: InputDecoration(
                                       labelText: varName,
