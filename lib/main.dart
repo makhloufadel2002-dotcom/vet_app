@@ -34,7 +34,6 @@ class _MainAppState extends State<MainApp> {
 
   List<String> _customVariableNames = [];
 
-  // تم تعديل الرموز إلى الشكل الجديد
   final List<String> _baseVariables = [
     '{#nom}',
     '{#pere}',
@@ -81,8 +80,13 @@ class _MainAppState extends State<MainApp> {
         .toList();
     setState(() {
       _templates = files;
-      if (_templates.isNotEmpty && !_templates.contains(_selectedTemplate)) {
-        _selectedTemplate = _templates.first;
+      // إذا حذفنا المودال ومابقاش في القائمة، نرجعوه للقيمة الأولى أو نفرغوه
+      if (_templates.isNotEmpty) {
+        if (!_templates.any((f) => f.path == _selectedTemplate?.path)) {
+          _selectedTemplate = _templates.first;
+        }
+      } else {
+        _selectedTemplate = null;
       }
     });
   }
@@ -105,6 +109,50 @@ class _MainAppState extends State<MainApp> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("تم حفظ المودال!", textDirection: TextDirection.rtl),
+        ),
+      );
+    }
+  }
+
+  // الدالة الجديدة لحذف المودال
+  Future<void> _deleteTemplate() async {
+    if (_selectedTemplate == null) return;
+
+    bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("حذف المودال", textDirection: TextDirection.rtl),
+        content: Text(
+          "هل أنت متأكد أنك تريد حذف '${p.basename(_selectedTemplate!.path)}'؟",
+          textDirection: TextDirection.rtl,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("إلغاء"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              "حذف",
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _selectedTemplate!.delete();
+      await _loadTemplates();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "تم حذف المودال بنجاح!",
+            textDirection: TextDirection.rtl,
+          ),
+          backgroundColor: Colors.red,
         ),
       );
     }
@@ -296,7 +344,6 @@ class _MainAppState extends State<MainApp> {
     );
   }
 
-  // تم التعديل هنا باش يخرجلك الإيرور إذا كان الوورد غالط
   void _generate() async {
     if (_selectedTemplate == null) return;
     String? selectedDirectory = await FilePicker.getDirectoryPath(
@@ -342,7 +389,6 @@ class _MainAppState extends State<MainApp> {
   @override
   Widget build(BuildContext context) {
     List<String> allVariables = List.from(_baseVariables);
-    // تم التعديل هنا باش حتى المتغيرات الإضافية تدي الرمز {#}
     allVariables.addAll(_customVariableNames.map((v) => '{#$v}'));
 
     return Scaffold(
@@ -403,7 +449,7 @@ class _MainAppState extends State<MainApp> {
 
             ExpansionTile(
               title: const Text(
-                "⚙️ إعدادات التواريخ والقوالب",
+                "⚙️ إعدادات التواريخ والقوالب (إضغط للفتح/الإغلاق)",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.blueGrey,
@@ -437,8 +483,16 @@ class _MainAppState extends State<MainApp> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.upload_file, color: Colors.blue),
+                      tooltip: "إضافة مودال جديد",
                       onPressed: _importTemplate,
                     ),
+                    // الزر الجديد تاع الحذف يظهر فقط إذا كان كاين مودال
+                    if (_templates.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        tooltip: "حذف المودال الحالي",
+                        onPressed: _deleteTemplate,
+                      ),
                   ],
                 ),
                 Row(

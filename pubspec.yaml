@@ -26,3 +26,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/templates/modele.docx
+
+dependency_overrides:
+  archive: 3.3.2
